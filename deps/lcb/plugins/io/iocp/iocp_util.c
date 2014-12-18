@@ -16,18 +16,17 @@
  */
 
 /**
- * New-Style v1 plugin for Windows, Using IOCP.
+ * New-Style v2 plugin for Windows, Using IOCP.
  * This file contains various utility functions used by the plugin
  * @author Mark Nunberg
  */
 
-
 #include "iocp_iops.h"
-#include "win_errno_sock.h"
 #include <sys/types.h>
 #include <sys/timeb.h>
 #include <time.h>
 #include "config.h"
+#include <libcouchbase/plugins/io/wsaerr-inl.c>
 
 #if defined(__MINGW32__) && !defined(_ftime_s)
 #define _ftime_s _ftime /** Mingw doens't have the _s variant */
@@ -35,59 +34,13 @@
 
 int iocp_w32err_2errno(DWORD error)
 {
-    switch (error) {
-
-    case WSAECONNRESET:
-    case WSAECONNABORTED:
-    case WSA_OPERATION_ABORTED:
-        return ECONNRESET;
-
-    case WSA_NOT_ENOUGH_MEMORY:
-        return ENOMEM;
-
-    case WSAEWOULDBLOCK:
-    case WSA_IO_PENDING:
-        return EWOULDBLOCK;
-
-    case WSAEINVAL:
-        return EINVAL;
-    case WSAEINPROGRESS:
-        return EINPROGRESS;
-    case WSAEALREADY:
-        return EALREADY;
-    case WSAEISCONN:
-        return EISCONN;
-
-    case WSAENOTCONN:
-    case WSAESHUTDOWN:
-        return ENOTCONN;
-
-    case WSAECONNREFUSED:
-        return ECONNREFUSED;
-
-    case WSAEINTR:
-        return EINTR;
-
-    case WSAENETDOWN:
-    case WSAENETUNREACH:
-    case WSAEHOSTUNREACH:
-    case WSAEHOSTDOWN:
-        return ENETUNREACH;
-    case WSAENOTSOCK:
-        return ENOTSOCK;
-
-    default:
-        IOCP_LOG(IOCP_WARN, "Unknown error code %d.", (int)error);
-        return EINVAL;
-    }
-
-    return EINVAL;
+    return wsaerr_map_impl(error);
 }
 
 DWORD iocp_set_last_error(lcb_io_opt_t io, SOCKET sock)
 {
     int werr = GetLastError();
-    io->v.v1.error = iocp_w32err_2errno(werr);
+    io->v.v2.error = iocp_w32err_2errno(werr);
     return werr;
 }
 
@@ -115,28 +68,11 @@ LPFN_CONNECTEX iocp_initialize_connectex(SOCKET sock)
     return ret;
 }
 
-
-
-void iocp_free_bufinfo_common(struct lcb_buf_info *bi)
-{
-    if (bi->root || bi->ringbuffer) {
-        assert((void *)bi->root != (void *)bi->ringbuffer);
-    }
-    assert((bi->ringbuffer && bi->root) ||
-           (bi->ringbuffer == NULL && bi->root == NULL));
-
-    free(bi->root);
-    free(bi->ringbuffer);
-    bi->root = NULL;
-    bi->ringbuffer = NULL;
-}
-
 int iocp_just_scheduled(iocp_t *io, iocp_overlapped_t *ol, int status)
 {
     DWORD err = GetLastError();
     IOCP_LOG(IOCP_TRACE, "Pending count: %d", io->n_iopending);
     if ((status != 0 && err == WSA_IO_PENDING) || status == 0) {
-
         io->n_iopending++;
         ol->sd->refcount++;
         return 0;
@@ -146,7 +82,7 @@ int iocp_just_scheduled(iocp_t *io, iocp_overlapped_t *ol, int status)
      * Otherwise, there's something wrong
      */
     IOCP_LOG(IOCP_ERR, "Got non-harmless error for %p: %d", ol, (int)err);
-    io->base.v.v1.error = iocp_w32err_2errno(err);
+    io->base.v.v2.error = iocp_w32err_2errno(err);
     return -1;
 }
 
@@ -160,8 +96,6 @@ void iocp_socket_decref(iocp_t *io, iocp_sockdata_t *sd)
         closesocket(sd->sSocket);
     }
 
-    iocp_free_bufinfo_common(&sd->sd_base.read_buffer);
-
     lcb_list_delete(&sd->list);
 
     (void)io;
@@ -174,11 +108,8 @@ void iocp_on_dequeued(iocp_t *io, iocp_sockdata_t *sd, int action)
     iocp_socket_decref(io, sd);
 }
 
-/**
- * This following function was copied from libuv. Its license reads
- * as follows
- * [ LICENSE ]
- */
+/**This following function was copied from libuv.
+ * See http://github.com/joyent/libuv for more details */
 int iocp_overlapped_status(OVERLAPPED *lpOverlapped)
 {
     NTSTATUS status = (NTSTATUS)lpOverlapped->Internal;

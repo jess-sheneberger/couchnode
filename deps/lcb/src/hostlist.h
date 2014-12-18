@@ -74,10 +74,16 @@ void hostlist_clear(hostlist_t hostlist);
  *
  * @return LCB_EINVAL if the host format is invalid
  */
-lcb_error_t lcb_host_parse(lcb_host_t *host,
-                            const char *spec,
-                            int speclen,
-                            int deflport);
+lcb_error_t
+lcb_host_parse(lcb_host_t *host, const char *spec, int speclen, int deflport);
+
+/** Wrapper around lcb_host_parse() which accepts a NUL-terminated string
+ * @param host the host to populate
+ * @param spec a NUL-terminated string to parse
+ * @param deflport the default port to use if the `spec` does not contain a port
+ * @see lcb_host_parse()
+ */
+#define lcb_host_parsez(host, spec, deflport) lcb_host_parse(host, spec, -1, deflport)
 
 /**
  * Compares two hosts for equality.
@@ -85,10 +91,7 @@ lcb_error_t lcb_host_parse(lcb_host_t *host,
  * @param b other host to compare
  * @return true if equal, false if different.
  */
-
-#define lcb_host_parsez(host, spec, deflport) lcb_host_parse(host, spec, -1, deflport)
-
-int lcb_host_equals(lcb_host_t *a, lcb_host_t *b);
+int lcb_host_equals(const lcb_host_t *a, const lcb_host_t *b);
 
 /**
  * Adds a string to the hostlist. See lcb_host_parse for details.
@@ -105,7 +108,7 @@ lcb_error_t hostlist_add_string(hostlist_t hostlist,
 #define hostlist_add_stringz(hostlist, spec, deflport) \
     hostlist_add_string(hostlist, spec, -1, deflport)
 
-lcb_error_t hostlist_add_host(hostlist_t hostlist, lcb_host_t *host);
+lcb_error_t hostlist_add_host(hostlist_t hostlist, const lcb_host_t *host);
 
 /**
  * Return the next host in the list.

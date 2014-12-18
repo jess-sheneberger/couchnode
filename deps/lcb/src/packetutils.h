@@ -1,3 +1,20 @@
+/* -*- Mode: C; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
+/*
+ *     Copyright 2014 Couchbase, Inc.
+ *
+ *   Licensed under the Apache License, Version 2.0 (the "License");
+ *   you may not use this file except in compliance with the License.
+ *   You may obtain a copy of the License at
+ *
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ */
+
 #ifndef LCB_PACKETUTILS_H
 #define LCB_PACKETUTILS_H
 
@@ -6,8 +23,8 @@ extern "C" {
 #endif
 
 #include <libcouchbase/couchbase.h>
-#include "cookie.h"
 #include "ringbuffer.h"
+#include "rdb/rope.h"
 #include "memcached/protocol_binary.h"
 
 /**
@@ -21,8 +38,8 @@ typedef struct packet_info_st {
     protocol_binary_response_header res;
     /** The payload of the response. This should only be used if there is a body */
     void *payload;
-    struct lcb_command_data_st ct;
-    int is_allocated;
+    /** Segment for payload */
+    void *bufh;
 } packet_info;
 
 /**
@@ -102,36 +119,27 @@ typedef struct packet_info_st {
 #define PACKET_EPHEMERAL_START(pkt) \
     (const void *)(( ((const char *)(pkt)->payload) - 24 ))
 
-#define PACKET_TRACE(tgt, info, rc, resp) \
-    tgt(PACKET_OPAQUE(info), \
-        (info)->ct.vbucket, \
-        PACKET_OPCODE(info), \
-        rc, \
-        resp)
-
-#define PACKET_TRACE_NORES(tgt, info, rc) \
-    tgt(PACKET_OPAQUE(info), \
-        (info)->ct.vbucket, \
-        PACKET_OPCODE(info), \
-        rc)
-
 /**
- * Reads the header of the packet.
- * @param info a new info structure to read info
- * @param src the ringbuffer containing the buffer
- * @return 0 if not enough data, 1 if read successfully, -1 on error.
+ * Read from an 'IOR' structure to parse the packet information. This will
+ * always load a full packet.
  *
- * Note that the ringbuffer itself should *not* be accessed or modified until
- * after release_ringbuffer has been called.
+ * @param info the info structure to populate
+ * @param ior the rope structure to read from
+ * @param[out] required how much total bytes must remain in the buffer for the
+ *  parse to complete.
+ *
+ * @return zero if more data is needed, a true value otherwise
  */
-int lcb_packet_read_ringbuffer(packet_info *info, ringbuffer_t *src);
+int
+lcb_pktinfo_ior_get(packet_info *info, rdb_IOROPE *ior, unsigned *required);
 
-/**
- * Release any resources allocated via the packet structure.
- *
- * This will advance the ringbuffer position as well.
- */
-void lcb_packet_release_ringbuffer(packet_info *info, ringbuffer_t *src);
+void
+lcb_pktinfo_ior_done(packet_info *info, rdb_IOROPE *ior);
+
+#define lcb_pktinfo_ectx_get(info, ctx, n) lcb_pktinfo_ior_get(info, &(ctx)->ior, n)
+#define lcb_pktinfo_ectx_done(info, ctx) lcb_pktinfo_ior_done(info, &(ctx)->ior)
+
+
 
 #ifdef __cplusplus
 }

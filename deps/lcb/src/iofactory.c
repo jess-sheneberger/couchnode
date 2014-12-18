@@ -17,6 +17,7 @@
 
 #include "internal.h"
 #include "plugins/io/select/select_io_opts.h"
+#include <libcouchbase/plugins/io/bsdio-inl.c>
 
 typedef lcb_error_t (*create_func_t)(int version, lcb_io_opt_t *io, void *cookie);
 
@@ -101,11 +102,10 @@ static int get_env_plugin_info(plugin_info *info)
     plugin_info *cur = NULL;
     memset(info, 0, sizeof(*info));
 
-    if (!lcb_getenv_nonempty("LIBCOUCHBASE_EVENT_PLUGIN_NAME",
-                             info->s_soname, sizeof(info->s_soname))) {
+    if (!lcb_getenv_nonempty_multi(info->s_soname, sizeof(info->s_soname),
+        "LIBCOUCHBASE_EVENT_PLUGIN_NAME", "LCB_IOPS_NAME", NULL)) {
         return 0;
     }
-
 
     for (cur = builtin_plugins; cur->base; cur++) {
         if (strlen(cur->base) != strlen(info->s_soname)) {
@@ -118,8 +118,8 @@ static int get_env_plugin_info(plugin_info *info)
         }
     }
 
-    if (!lcb_getenv_nonempty("LIBCOUCHBASE_EVENT_PLUGIN_SYMBOL",
-                             info->s_symbol, sizeof(info->s_symbol))) {
+    if (!lcb_getenv_nonempty_multi(info->s_symbol, sizeof(info->s_symbol),
+        "LIBCOUCHBASE_EVENT_PLUGIN_SYMBOL", "LCB_IOPS_SYMBOL", NULL)) {
         return -1;
     }
 
@@ -161,6 +161,7 @@ static void options_from_info(struct lcb_create_io_ops_st *opts,
         break;
     default:
         lcb_assert("unknown options version" && 0);
+        cookie = NULL;
     }
 
     if (info->create) {
@@ -346,7 +347,8 @@ static lcb_error_t generate_options(plugin_info *pi,
                 int want_debug;
                 lcb_error_t ret;
 
-                if (lcb_getenv_boolean("LIBCOUCHBASE_DLOPEN_DEBUG")) {
+                if (lcb_getenv_boolean_multi("LIBCOUCHBASE_DLOPEN_DEBUG",
+                    "LCB_DLOPEN_DEBUG", NULL)) {
                     want_debug = 1;
                 } else {
                     want_debug = want_dl_debug;
@@ -398,14 +400,36 @@ lcb_error_t lcb_create_io_ops(lcb_io_opt_t *io,
         return err;
     }
 
-    switch (options.version) {
-    case 1:
-        return create_v1(io, &options);
-    case 2:
-        return create_v2(io, &options);
-    default:
+    if (options.version == 1) {
+        err = create_v1(io, &options);
+    } else if (options.version == 2) {
+        err = create_v2(io, &options);
+    } else {
         return LCB_NOT_SUPPORTED;
     }
+
+    if (err != LCB_SUCCESS) {
+        return err;
+    }
+    /*XXX:
+     * This block of code here because the Ruby SDK relies on undocumented
+     * functionality of older versions of libcouchbase in which its send/recv
+     * functions assert that the number of IOV elements passed is always going
+     * to be 2.
+     *
+     * This works around the issue by patching the send/recv functions of
+     * the ruby implementation at load-time.
+     *
+     * This block of code will go away once the Ruby SDK is fixed and a released
+     * version has been out for enough time that it won't break common existing
+     * deployments.
+     */
+    if (io_opts && io_opts->version == 1 && io_opts->v.v1.symbol != NULL) {
+        if (strstr(io_opts->v.v1.symbol, "cb_create_ruby")) {
+            wire_lcb_bsd_impl(*io);
+        }
+    }
+    return LCB_SUCCESS;
 }
 
 static lcb_error_t create_v1(lcb_io_opt_t *io,
@@ -415,7 +439,8 @@ static lcb_error_t create_v1(lcb_io_opt_t *io,
     int want_debug;
     lcb_error_t ret;
 
-    if (lcb_getenv_boolean("LIBCOUCHBASE_DLOPEN_DEBUG")) {
+    if (lcb_getenv_boolean_multi("LIBCOUCHBASE_DLOPEN_DEBUG",
+        "LCB_DLOPEN_DEBUG", NULL)) {
         want_debug = 1;
     } else {
         want_debug = want_dl_debug;
@@ -449,7 +474,7 @@ static lcb_error_t create_v1(lcb_io_opt_t *io,
         lcb_io_opt_t iop = *io;
         iop->dlhandle = plugin.dlhandle;
         /* check if plugin selected compatible version */
-        if (iop->version < 0 || iop->version > 1) {
+        if (iop->version < 0 || iop->version > 2) {
             lcb_destroy_io_ops(iop);
             return LCB_PLUGIN_VERSION_MISMATCH;
         }
@@ -469,7 +494,7 @@ static lcb_error_t create_v2(lcb_io_opt_t *io,
     } else {
         lcb_io_opt_t iop = *io;
         /* check if plugin selected compatible version */
-        if (iop->version < 0 || iop->version > 1) {
+        if (iop->version < 0 || iop->version > 2) {
             lcb_destroy_io_ops(iop);
             return LCB_PLUGIN_VERSION_MISMATCH;
         }

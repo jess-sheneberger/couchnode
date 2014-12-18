@@ -58,10 +58,8 @@ static void set_char_ptr(char cmd, const void *arg, void *cookie)
     *myptr = arg;
 }
 
-const char *host = "localhost:8091";
-const char *username = NULL;
+const char *connstr = "localhost:8091";
 const char *passwd = NULL;
-const char *bucket = NULL;
 const char *filename = "-";
 const char *post_data = NULL;
 int chunked = 0;
@@ -69,39 +67,10 @@ int minify = 0;
 int force_utf8 = 0;
 
 struct cookie_st {
-    struct lcb_io_opt_st *io;
     yajl_handle parser;
     yajl_gen gen;
 };
 
-static void set_auth_data(char cmd, const void *arg, void *cookie)
-{
-    (void)cmd;
-    (void)cookie;
-    username = arg;
-    if (isatty(fileno(stdin))) {
-        char prompt[80];
-        snprintf(prompt, sizeof(prompt), "Please enter password for %s: ", username);
-        passwd = getpass(prompt);
-        if (passwd == NULL) {
-            exit(EXIT_FAILURE);
-        }
-    } else {
-        char buffer[80];
-        if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
-            exit(EXIT_FAILURE);
-        }
-        size_t len = strlen(buffer) - 1;
-        while (len > 0 && isspace(buffer[len])) {
-            buffer[len] = '\0';
-            --len;
-        }
-        if (len == 0) {
-            exit(EXIT_FAILURE);
-        }
-        passwd = strdup(buffer);
-    }
-}
 
 typedef void (*OPTION_HANDLER)(char cmd, const void *arg, void *cookie);
 static struct {
@@ -119,28 +88,21 @@ static struct {
         .letter = '?',
         .handler = usage
     },
-    ['u'] = {
-        .name = "username",
-        .description = "\t-u name\t\tSpecify username",
+    ['U'] = {
+        .name = "spec",
+        .description = "\t-U spec\t\tCouchbase cluster connection string",
         .argument = 1,
-        .letter = 'u',
-        .handler = set_auth_data
-    },
-    ['h'] = {
-        .name = "host",
-        .description = "\t-h host\t\tHost to read configuration from",
-        .argument = 1,
-        .letter = 'h',
+        .letter = 'U',
         .handler = set_char_ptr,
-        .cookie = &host
+        .cookie = &connstr
     },
-    ['b'] = {
-        .name = "bucket",
-        .description = "\t-b bucket\tThe bucket to connect to",
+    ['P'] = {
+        .name = "password",
+        .description = "\t-P password\tBucket password (if required)",
         .argument = 1,
-        .letter = 'b',
+        .letter = 'P',
         .handler = set_char_ptr,
-        .cookie = &bucket
+        .cookie = &passwd,
     },
     ['o'] = {
         .name = "file",
@@ -314,7 +276,7 @@ static void data_callback(lcb_http_request_t request,
             unsigned char *str = yajl_get_error(c->parser, 1, bytes, nbytes);
             fprintf(stderr, "%s", (const char *) str);
             yajl_free_error(c->parser, str);
-            c->io->v.v0.stop_event_loop(c->io);
+            lcb_breakout(instance);
         }
     } else { /* end of response */
         st = yajl_complete_parse(c->parser);
@@ -329,10 +291,9 @@ static void data_callback(lcb_http_request_t request,
             fwrite(buf, 1, len, output);
             yajl_gen_clear(c->gen);
         }
-        c->io->v.v0.stop_event_loop(c->io);
+        lcb_breakout(instance);
     }
     (void)request;
-    (void)instance;
 }
 
 static void complete_callback(lcb_http_request_t request,
@@ -375,22 +336,9 @@ static void complete_callback(lcb_http_request_t request,
                 error, lcb_strerror(instance, error), resp->v.v0.status);
         fwrite(bytes, nbytes, 1, output);
     }
-    c->io->v.v0.stop_event_loop(c->io);
+    lcb_breakout(instance);
     (void)request;
     (void)instance;
-}
-
-static void error_callback(lcb_t instance,
-                           lcb_error_t error,
-                           const char *errinfo)
-{
-    (void)instance;
-    fprintf(stderr, "Error %d", error);
-    if (errinfo) {
-        fprintf(stderr, ": %s", errinfo);
-    }
-    fprintf(stderr, "\n");
-    exit(EXIT_FAILURE);
 }
 
 int main(int argc, char **argv)
@@ -428,25 +376,16 @@ int main(int argc, char **argv)
     yajl_config(cookie.parser, yajl_allow_comments, 1);
     yajl_config(cookie.parser, yajl_dont_validate_strings, !force_utf8);
 
-    if (lcb_create_io_ops(&cookie.io, NULL) != LCB_SUCCESS) {
-        fprintf(stderr, "Failed to create IO instance\n");
-        return 1;
-    }
-
     memset(&options, 0, sizeof(options));
-
-    options.v.v0.host = host;
-    options.v.v0.user = username;
-    options.v.v0.passwd = passwd;
-    options.v.v0.bucket = bucket;
-    options.v.v0.io = cookie.io;
+    options.version = 3;
+    options.v.v3.connstr = connstr;
+    options.v.v3.passwd = passwd;
 
     if (lcb_create(&instance, &options) != LCB_SUCCESS) {
         fprintf(stderr, "Failed to create libcouchbase instance\n");
         return 1;
     }
 
-    (void)lcb_set_error_callback(instance, error_callback);
     (void)lcb_set_http_data_callback(instance, data_callback);
     (void)lcb_set_http_complete_callback(instance, complete_callback);
 
@@ -457,6 +396,10 @@ int main(int argc, char **argv)
 
     // Wait for the connect to compelete
     lcb_wait(instance);
+    if (lcb_get_bootstrap_status(instance) != LCB_SUCCESS) {
+        fprintf(stderr, "Failed to bootstrap cluster\n");
+        return 1;
+    }
 
     bytes = post_data;
     if (bytes) {
@@ -473,13 +416,13 @@ int main(int argc, char **argv)
     cmd.v.v0.content_type = "application/json";
     rc = lcb_make_http_request(instance, &cookie, LCB_HTTP_TYPE_VIEW, &cmd, NULL);
     if (rc != LCB_SUCCESS) {
-        fprintf(stderr, "Failed to execute view\n");
+        fprintf(stderr, "Failed to execute view (%s)\n", lcb_strerror(instance, rc));
         return 1;
     }
 
     /* Start the event loop and let it run until request will be completed
      * with success or failure (see view callbacks)  */
-    cookie.io->v.v0.run_event_loop(cookie.io);
+    lcb_wait(instance);
 
     yajl_free(cookie.parser);
     yajl_gen_free(cookie.gen);

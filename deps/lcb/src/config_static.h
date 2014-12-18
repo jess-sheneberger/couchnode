@@ -102,9 +102,13 @@
 #endif
 #endif
 
+#ifdef HAVE_ARPA_INET_H
+#include <arpa/inet.h>
+#endif
+
 
 #ifdef _WIN32
-#include "win32/win_errno_sock.h"
+#include <libcouchbase/plugins/io/wsaerr.h>
 
 #ifndef __MINGW32__
 #define snprintf _snprintf

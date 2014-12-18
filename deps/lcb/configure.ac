@@ -83,7 +83,9 @@ COUCHBASE_GENERIC_COMPILER(c99)
 AM_CPPFLAGS="$AM_CPPFLAGS -I\${top_srcdir}/src -I\${top_srcdir}/contrib -I\${top_srcdir}/contrib/cbsasl/include"
 AM_NOWARN_CPPFLAGS="$AM_NOWARN_CPPFLAGS -I\${top_srcdir}/src -I\${top_srcdir}/contrib -I\${top_srcdir}/contrib/cbsasl/include"
 CHANGESET=GIT_CHANGESET
+REVDESCRIBE=GIT_DESCRIBE
 AC_SUBST(CHANGESET)
+AC_SUBST(REVDESCRIBE)
 
 #
 # To ensure that we don't break applications in mysterious ways we need
@@ -91,14 +93,14 @@ AC_SUBST(CHANGESET)
 # http://www.gnu.org/software/libtool/manual/libtool.html#Libtool-versioning
 #
 API_CURRENT=2
-API_REVISION=14
+API_REVISION=20
 API_AGE=0
 AC_SUBST(API_CURRENT)
 AC_SUBST(API_REVISION)
 AC_SUBST(API_AGE)
 
 # The actual version numbers for the developers ;)
-LCB_VERSION="2.3.1"
+LCB_VERSION="2.4.4"
 LCB_VERSION_HEX=`echo ${LCB_VERSION} | awk -F. '{printf "0x%0.2d%0.2d%0.2d", $1, $2, $3}'`
 AC_SUBST(LCB_VERSION)
 AC_SUBST(LCB_VERSION_HEX)
@@ -165,7 +167,7 @@ AS_IF([test "x${WGET}" != "xno"],
       [DOWNLOAD="${WGET} -q -O"],
       [AS_IF([test "x${CURL}" != "xno"],
              [DOWNLOAD="${CURL} -s -L -o"],
-             [AC_MSG_ERROR([You need wget or curl in path to download the headers.])])])
+             [AC_MSG_WARN([You might need wget or curl in path to download extra files.])])])
 
 AC_SUBST(DOWNLOAD)
 
@@ -322,6 +324,10 @@ AM_CONDITIONAL(HAVE_LIBEVENT2, [test "x${ac_cv_have_libevent2}" = "xyes"])
 AS_IF([test "x${ac_cv_enable_plugins}" = "xyes" -a "x${ac_cv_have_libevent2}" = "xyes"],
       [AC_DEFINE([HAVE_LIBEVENT2], [1], [We have libevent2])])
 
+AC_ARG_ENABLE([libuv],
+              [AS_HELP_STRING([--disable-libuv], [Build without libuv. You might need this when building package in development environment.])],
+              [ac_cv_enable_libuv="no"],
+              [ac_cv_enable_libuv="yes"])
 AC_CACHE_CHECK([for libuv], [ac_cv_have_libuv],
   [ saved_libs="$LIBS"
     LIBS=-luv
@@ -336,7 +342,7 @@ AC_CACHE_CHECK([for libuv], [ac_cv_have_libuv],
       ])
     LIBS="$saved_libs"
   ])
-AM_CONDITIONAL(HAVE_LIBUV, [test "x${ac_cv_have_libuv}" = "xyes"])
+AM_CONDITIONAL(HAVE_LIBUV, [test "x${ac_cv_have_libuv}" = "xyes" -a "x${ac_cv_enable_libuv}" = "xyes"])
 AS_IF([test "x${ac_cv_enable_plugins}" = "xyes" -a "x${ac_cv_have_libuv}" = "xyes"],
       [AC_DEFINE([HAVE_LIBUV], [1], [We have libuv])])
 
@@ -349,6 +355,33 @@ AS_IF([test "x$ac_cv_enable_plugins" = "xyes" -a \
        "x${ac_cv_have_libev3}" != "xyes" -a \
        "x${ac_cv_have_libev4}" != "xyes"],
       [AC_MSG_ERROR(Failed to locate usable event library. You must install either libev or libevent dev package or use --disable-plugins option)])
+
+AC_ARG_ENABLE([ssl], [AS_HELP_STRING([--enable-ssl], [Do not build SSL support. @<:@default=on@:>@])],
+    [ac_cv_enable_ssl="$enableval"], [ac_cv_enable_ssl="yes"])
+AM_CONDITIONAL(ENABLE_SSL, [ test "x${ac_cv_enable_ssl}" = "xyes"])
+AS_IF([test "x${ac_cv_enable_ssl}" = "xyes"], AC_DEFINE(ENABLE_SSL, [1], [SSL Support will be enabled]))
+
+m4_include([m4/ax_check_openssl.m4])
+AX_CHECK_OPENSSL([ac_cv_have_openssl="yes"], [ac_cv_have_openssl="no"])
+AM_CONDITIONAL(HAVE_OPENSSL, [test "x${ac_cv_have_openssl}" = "xyes"])
+AS_IF([test "x${ac_cv_have_openssl}" != "xyes" && test "x${ac_cv_enable_ssl}" = "xyes"],
+      [AC_MSG_ERROR(OpenSSL development files must be installed for SSL support. Use --enable-ssl=no to force)])
+
+
+AC_ARG_ENABLE([snappy], [AS_HELP_STRING([--enable-snappy], [Enable snappy compression. @<:@default=off@:>@])],
+    [ac_cv_enable_snappy="$enableval"], [ac_cv_enable_snappy="no"])
+
+AC_ARG_ENABLE([static-snappy], [AS_HELP_STRING([--enable-static-snappy], [Use bundled libsnappy. @<:@default=off@:>@])],
+    [ac_cv_enable_static_snappy="$enableval"], [ac_cv_enable_static_snappy="no"])
+
+m4_include([m4/ax_check_snappy.m4])
+AX_CHECK_SNAPPY([ac_cv_have_snappy="yes"], [ac_cv_have_snappy="no"])
+AM_CONDITIONAL(HAVE_SNAPPY, [test "x${ac_cv_have_snappy}" = "xyes"])
+AM_CONDITIONAL(BUILD_STATIC_SNAPPY, [test "x${ac_cv_enable_static_snappy}" = "xyes"])
+AM_CONDITIONAL(ENABLE_SNAPPY, [test "x${ac_cv_enable_snappy}" = "xyes"])
+
+AS_IF([test "x${ac_cv_have_snappy}" != "xyes" && test "x${ac_cv_enable_snappy}" = "xyes" && test "x${ac_cv_enable_static_snappy}" != "xyes"],
+      [AC_MSG_ERROR(Snappy support requires either an installed libsnappy or the --enable-static-snappy option)])
 
 dnl Check if we've got libyajl2
 AC_CACHE_CHECK([for libyajl], [ac_cv_have_libyajl2],
@@ -384,6 +417,7 @@ return htonll(0);
 ])
 AS_IF([test "x$ac_cv_have_htonll" = "xyes"],[
        AC_DEFINE([HAVE_HTONLL], [1], [Have ntohll])])
+
 
 AC_ARG_ENABLE([couchbasemock],
     [AS_HELP_STRING([--disable-couchbasemock],
@@ -687,5 +721,3 @@ AS_IF([test "$ac_cv_have_gtest" = "no" -a "$ac_cv_have_gtest_src" = "no"],
               echo "*"
               echo "*****"
               ])])
-
-

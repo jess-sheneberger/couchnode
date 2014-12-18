@@ -1,3 +1,20 @@
+/* -*- Mode: C; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
+/*
+ *     Copyright 2014 Couchbase, Inc.
+ *
+ *   Licensed under the Apache License, Version 2.0 (the "License");
+ *   you may not use this file except in compliance with the License.
+ *   You may obtain a copy of the License at
+ *
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ */
+
 #ifndef LCB_LOGGING_H
 #define LCB_LOGGING_H
 #include <stdarg.h>
@@ -16,6 +33,12 @@ struct lcb_st;
  */
 extern struct lcb_logprocs_st *lcb_console_logprocs;
 
+struct lcb_CONSOLELOGGER {
+    struct lcb_logprocs_st base;
+    FILE *fp;
+    int minlevel;
+};
+
 /**
  * Log a message via the installed logger. The parameters correlate to the
  * arguments passed to the lcb_logging_callback function.
@@ -29,8 +52,11 @@ void lcb_log(const struct lcb_settings_st *settings,
              int severity,
              const char *srcfile,
              int srcline,
-             const char *fmt,
-             ...);
+             const char *fmt, ...)
+#ifdef __GNUC__
+             __attribute__ ((format(printf, 6, 7)))
+#endif
+             ;
 
 lcb_logprocs * lcb_init_console_logger(void);
 
